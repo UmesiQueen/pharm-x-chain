@@ -182,14 +182,17 @@ contract GlobalRegistry is IGlobalRegistry {
      * @param entityAddress Address of the entity to deactivate
      */
     function deactivateEntity(address entityAddress) public onlyOwner {
-        if (entities[entityAddress].role == Role.NONE) {
+        require(entityAddress != address(0), "Invalid address");
+        Entity storage entity = entities[entityAddress];
+
+        if (entity.role == Role.NONE) {
             revert GlobalRegistry__EntityDoesNotExist();
         }
-        if (!entities[entityAddress].isActive) {
-            revert GlobalRegistry__EntityAlreadyDeactivated(entityAddress, entities[entityAddress].isActive);
+        if (!entity.isActive) {
+            revert GlobalRegistry__EntityAlreadyDeactivated(entityAddress, entity.isActive);
         }
 
-        entities[entityAddress].isActive = false;
+        entity.isActive = false;
 
         emit EntityDeactivated(entityAddress);
     }
@@ -199,14 +202,17 @@ contract GlobalRegistry is IGlobalRegistry {
      * @param entityAddress Address of the entity to activate
      */
     function activateEntity(address entityAddress) public onlyOwner {
-        if (entities[entityAddress].role == Role.NONE) {
+        require(entityAddress != address(0), "Invalid address");
+        Entity storage entity = entities[entityAddress];
+
+        if (entity.role == Role.NONE) {
             revert GlobalRegistry__EntityDoesNotExist();
         }
-        if (entities[entityAddress].isActive) {
-            revert GlobalRegistry__EntityAlreadyActivated(entityAddress, entities[entityAddress].isActive);
+        if (entity.isActive) {
+            revert GlobalRegistry__EntityAlreadyActivated(entityAddress, entity.isActive);
         }
 
-        entities[entityAddress].isActive = true;
+        entity.isActive = true;
 
         emit EntityActivated(entityAddress);
     }

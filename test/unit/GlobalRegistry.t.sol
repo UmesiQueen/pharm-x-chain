@@ -10,8 +10,6 @@ contract GlobalRegistryTest is Test {
 
     address public REGULATOR; // owner
     address public MANUFACTURER = makeAddr("manufacturer");
-    address public SUPPLIER = makeAddr("supplier");
-    address public PHARMACY = makeAddr("pharmacy");
 
     function setUp() public {
         // Deploy contract and set owner
@@ -24,8 +22,6 @@ contract GlobalRegistryTest is Test {
     modifier registerEntity() {
         vm.prank(REGULATOR);
         globalRegistry.registerManufacturer(MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123");
-        globalRegistry.registerSupplier(SUPPLIER, "Supplier1", "flic-en-flac", "SUP123");
-        globalRegistry.registerPharmacy(PHARMACY, "Pharmacy1", "flic-en-flac", "PHM123");
         _;
     }
 
@@ -41,7 +37,7 @@ contract GlobalRegistryTest is Test {
 
     // ================ REGISTRATION TESTS ================
     function testOnlyOwnerCanRegister() public {
-        vm.prank(SUPPLIER);
+        vm.prank(MANUFACTURER);
 
         vm.expectRevert(GlobalRegistry.GlobalRegistry__SenderIsNotOwner.selector);
         globalRegistry.registerManufacturer(MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123");
@@ -71,23 +67,25 @@ contract GlobalRegistryTest is Test {
 
     function testRevertWithEntityAlreadyDeactivated() public registerEntity {
         vm.startPrank(REGULATOR);
-        globalRegistry.deactivateEntity(SUPPLIER);
+        globalRegistry.deactivateEntity(MANUFACTURER);
 
-        (,,,, bool isActive,) = globalRegistry.getEntityDetails(SUPPLIER);
+        (,,,, bool isActive,) = (globalRegistry.getEntityDetails(MANUFACTURER));
 
         vm.expectRevert(
-            abi.encodeWithSelector(GlobalRegistry.GlobalRegistry__EntityAlreadyDeactivated.selector, SUPPLIER, isActive)
+            abi.encodeWithSelector(
+                GlobalRegistry.GlobalRegistry__EntityAlreadyDeactivated.selector, MANUFACTURER, isActive
+            )
         );
-        globalRegistry.deactivateEntity(SUPPLIER);
+        globalRegistry.deactivateEntity(MANUFACTURER);
 
         vm.stopPrank();
     }
 
     function testRevertEntityAlreadyActivated() public registerEntity {
         vm.expectRevert(
-            abi.encodeWithSelector(GlobalRegistry.GlobalRegistry__EntityAlreadyActivated.selector, SUPPLIER, true)
+            abi.encodeWithSelector(GlobalRegistry.GlobalRegistry__EntityAlreadyActivated.selector, MANUFACTURER, true)
         );
-        globalRegistry.activateEntity(SUPPLIER);
+        globalRegistry.activateEntity(MANUFACTURER);
     }
 
     function testRevertWithEntityAlreadyRegistered() public registerEntity {
@@ -115,18 +113,18 @@ contract GlobalRegistryTest is Test {
     function testEntityDeactivationEmitsEvent() public registerEntity {
         vm.prank(REGULATOR);
         vm.expectEmit(true, false, false, false);
-        emit GlobalRegistry.EntityDeactivated(PHARMACY);
+        emit GlobalRegistry.EntityDeactivated(MANUFACTURER);
 
-        globalRegistry.deactivateEntity(PHARMACY);
+        globalRegistry.deactivateEntity(MANUFACTURER);
     }
 
     function testEntityActivationEmitsEvent() public registerEntity {
         vm.prank(REGULATOR);
-        globalRegistry.deactivateEntity(PHARMACY);
+        globalRegistry.deactivateEntity(MANUFACTURER);
 
         vm.expectEmit(true, false, false, false);
-        emit GlobalRegistry.EntityActivated(PHARMACY);
+        emit GlobalRegistry.EntityActivated(MANUFACTURER);
 
-        globalRegistry.activateEntity(PHARMACY);
+        globalRegistry.activateEntity(MANUFACTURER);
     }
 }
