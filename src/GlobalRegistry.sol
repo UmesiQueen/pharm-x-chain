@@ -15,6 +15,8 @@ interface IGlobalRegistry {
     function verifyEntity(address entityAddress) external view returns (bool);
 
     function getEntityRole(address entityAddress) external view returns (Role);
+
+    function getManufacturerId(address manufacturerAddress) external view returns (string memory);
 }
 
 /**
@@ -175,6 +177,17 @@ contract GlobalRegistry is IGlobalRegistry {
      */
     function getEntityRole(address entityAddress) external view override returns (Role) {
         return entities[entityAddress].role;
+    }
+
+    /**
+     * @dev Get the manufacturer ID of a registered manufacturer
+     * @param manufacturerAddress Address of the manufacturer
+     * @return uint256 Manufacturer ID
+     */
+    function getManufacturerId(address manufacturerAddress) external view override returns (string memory) {
+        Entity storage entity = entities[manufacturerAddress];
+        require(entity.role == Role.MANUFACTURER, "Invalid manufacturer address");
+        return string(entity.licenseNumber);
     }
 
     /**
