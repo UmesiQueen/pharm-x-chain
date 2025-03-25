@@ -16,6 +16,18 @@ interface IGlobalRegistry {
 
     function getEntityRole(address entityAddress) external view returns (Role);
 
+    function getEntityDetails(address entityAddress)
+        external
+        view
+        returns (
+            string memory name,
+            string memory location,
+            string memory licenseNumber,
+            Role role,
+            bool isActive,
+            uint256 registrationDate
+        );
+
     function getManufacturerId(address manufacturerAddress) external view returns (string memory);
 }
 
@@ -33,8 +45,9 @@ contract GlobalRegistry is IGlobalRegistry {
     error GlobalRegistry__EntityAlreadyDeactivated(address entityAddress, bool isActive);
     error GlobalRegistry__EntityAlreadyActivated(address entityAddress, bool isActive);
     error GlobalRegistry__EntityDoesNotExist();
-
+    error GlobalRegistry__InvalidManufacturerAddress();
     // ================ STATE VARIABLES ================
+
     struct Entity {
         string name;
         string location;
@@ -76,89 +89,34 @@ contract GlobalRegistry is IGlobalRegistry {
     }
 
     /**
-     * @dev Register a new manufacturer
-     * @param manufacturerAddress Address of the manufacturer
+     * @dev Register a new entity
+     * @param entityAddress Address of the entity
+     * @param role Role of the entity
      * @param name Name of the manufacturer
      * @param location Physical location of the manufacturer
      * @param license License number of the manufacturer
      */
-    function registerManufacturer(
-        address manufacturerAddress,
+    function registerEntity(
+        address entityAddress,
+        Role role,
         string memory name,
         string memory location,
         string memory license
     ) public onlyOwner {
-        if (entities[manufacturerAddress].role != Role.NONE) {
-            revert GlobalRegistry__EntityAlreadyRegistered(manufacturerAddress, entities[manufacturerAddress].role);
+        if (entities[entityAddress].role != Role.NONE) {
+            revert GlobalRegistry__EntityAlreadyRegistered(entityAddress, entities[entityAddress].role);
         }
 
-        entities[manufacturerAddress] = Entity({
+        entities[entityAddress] = Entity({
             name: name,
             location: location,
             licenseNumber: license,
-            role: Role.MANUFACTURER,
+            role: role,
             isActive: true,
             registrationDate: block.timestamp
         });
 
-        emit EntityRegistered(manufacturerAddress, Role.MANUFACTURER, name);
-    }
-
-    /**
-     * @dev Register a new supplier
-     * @param supplierAddress Address of the supplier
-     * @param name Name of the supplier
-     * @param location Physical location of the supplier
-     * @param license License number of the supplier
-     */
-    function registerSupplier(
-        address supplierAddress,
-        string memory name,
-        string memory location,
-        string memory license
-    ) public onlyOwner {
-        if (entities[supplierAddress].role != Role.NONE) {
-            revert GlobalRegistry__EntityAlreadyRegistered(supplierAddress, entities[supplierAddress].role);
-        }
-        entities[supplierAddress] = Entity({
-            name: name,
-            location: location,
-            licenseNumber: license,
-            role: Role.SUPPLIER,
-            isActive: true,
-            registrationDate: block.timestamp
-        });
-
-        emit EntityRegistered(supplierAddress, Role.SUPPLIER, name);
-    }
-
-    /**
-     * @dev Register a new pharmacy
-     * @param pharmacyAddress Address of the pharmacy
-     * @param name Name of the pharmacy
-     * @param location Physical location of the pharmacy
-     * @param license License number of the pharmacy
-     */
-    function registerPharmacy(
-        address pharmacyAddress,
-        string memory name,
-        string memory location,
-        string memory license
-    ) public onlyOwner {
-        if (entities[pharmacyAddress].role != Role.NONE) {
-            revert GlobalRegistry__EntityAlreadyRegistered(pharmacyAddress, entities[pharmacyAddress].role);
-        }
-
-        entities[pharmacyAddress] = Entity({
-            name: name,
-            location: location,
-            licenseNumber: license,
-            role: Role.PHARMACY,
-            isActive: true,
-            registrationDate: block.timestamp
-        });
-
-        emit EntityRegistered(pharmacyAddress, Role.PHARMACY, name);
+        emit EntityRegistered(entityAddress, role, name);
     }
 
     /**
@@ -186,7 +144,10 @@ contract GlobalRegistry is IGlobalRegistry {
      */
     function getManufacturerId(address manufacturerAddress) external view override returns (string memory) {
         Entity storage entity = entities[manufacturerAddress];
-        require(entity.role == Role.MANUFACTURER, "Invalid manufacturer address");
+        if (entity.role != Role.MANUFACTURER) {
+            revert GlobalRegistry__InvalidManufacturerAddress();
+        }
+
         return string(entity.licenseNumber);
     }
 
@@ -241,8 +202,9 @@ contract GlobalRegistry is IGlobalRegistry {
      * @return registrationDate Registration date of the entity
      */
     function getEntityDetails(address entityAddress)
-        public
+        external
         view
+        override
         returns (
             string memory name,
             string memory location,

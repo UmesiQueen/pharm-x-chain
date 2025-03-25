@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: SEE LICENSE IN LICENSE
 pragma solidity ^0.8.19;
 
-import {Test, console2} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {GlobalRegistry, IGlobalRegistry} from "../../src/GlobalRegistry.sol";
 import {DeployGlobalRegistryScript} from "../../script/DeployGlobalRegistry.s.sol";
 
@@ -13,15 +13,18 @@ contract GlobalRegistryTest is Test {
 
     function setUp() public {
         // Deploy contract and set owner
-        vm.startPrank(address(this));
+        REGULATOR = makeAddr("regulator");
+
+        vm.startPrank(REGULATOR);
         globalRegistry = new GlobalRegistry();
-        REGULATOR = address(this);
         vm.stopPrank();
     }
 
     modifier registerEntity() {
         vm.prank(REGULATOR);
-        globalRegistry.registerManufacturer(MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123");
+        globalRegistry.registerEntity(
+            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123"
+        );
         _;
     }
 
@@ -40,13 +43,9 @@ contract GlobalRegistryTest is Test {
         vm.prank(MANUFACTURER);
 
         vm.expectRevert(GlobalRegistry.GlobalRegistry__SenderIsNotOwner.selector);
-        globalRegistry.registerManufacturer(MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123");
-    }
-
-    function testRegisterManufacturer() public {
-        vm.prank(REGULATOR);
-        globalRegistry.registerManufacturer(MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123");
-        assertTrue(globalRegistry.verifyEntity(MANUFACTURER));
+        globalRegistry.registerEntity(
+            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123"
+        );
     }
 
     function testEntityVerification() public registerEntity {
@@ -82,10 +81,12 @@ contract GlobalRegistryTest is Test {
     }
 
     function testRevertEntityAlreadyActivated() public registerEntity {
+        vm.startPrank(REGULATOR);
         vm.expectRevert(
             abi.encodeWithSelector(GlobalRegistry.GlobalRegistry__EntityAlreadyActivated.selector, MANUFACTURER, true)
         );
         globalRegistry.activateEntity(MANUFACTURER);
+        vm.stopPrank();
     }
 
     function testRevertWithEntityAlreadyRegistered() public registerEntity {
@@ -97,7 +98,9 @@ contract GlobalRegistryTest is Test {
                 IGlobalRegistry.Role.MANUFACTURER
             )
         );
-        globalRegistry.registerManufacturer(MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123");
+        globalRegistry.registerEntity(
+            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123"
+        );
     }
 
     // ================ EVENT TESTS ================
@@ -107,7 +110,9 @@ contract GlobalRegistryTest is Test {
         vm.expectEmit(true, false, false, false);
         emit GlobalRegistry.EntityRegistered(MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1");
 
-        globalRegistry.registerManufacturer(MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123");
+        globalRegistry.registerEntity(
+            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123"
+        );
     }
 
     function testEntityDeactivationEmitsEvent() public registerEntity {
@@ -119,12 +124,12 @@ contract GlobalRegistryTest is Test {
     }
 
     function testEntityActivationEmitsEvent() public registerEntity {
-        vm.prank(REGULATOR);
+        vm.startPrank(REGULATOR);
         globalRegistry.deactivateEntity(MANUFACTURER);
 
         vm.expectEmit(true, false, false, false);
         emit GlobalRegistry.EntityActivated(MANUFACTURER);
-
         globalRegistry.activateEntity(MANUFACTURER);
+        vm.stopPrank();
     }
 }
