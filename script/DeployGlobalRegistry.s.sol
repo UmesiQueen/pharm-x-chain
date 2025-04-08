@@ -22,7 +22,7 @@ contract DeployGlobalRegistryScript is Script {
         (
             string memory name,
             string memory location,
-            string memory licenseNumber,
+            string memory registrationNumber,
             IGlobalRegistry.Role role,
             bool isActive,
             uint256 registrationDate
@@ -31,7 +31,7 @@ contract DeployGlobalRegistryScript is Script {
         console2.log("\nDeployer registered as:");
         console2.log("- Name:", name);
         console2.log("- Role: REGULATOR (", uint256(role), ")");
-        console2.log("- License:", licenseNumber);
+        console2.log("- License:", registrationNumber);
         console2.log("- Location:", location);
         console2.log("- Active:", isActive);
         console2.log("- Registration Date:", registrationDate);

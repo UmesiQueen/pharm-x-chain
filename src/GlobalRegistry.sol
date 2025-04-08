@@ -22,7 +22,7 @@ interface IGlobalRegistry {
         returns (
             string memory name,
             string memory location,
-            string memory licenseNumber,
+            string memory registrationNumber,
             Role role,
             bool isActive,
             uint256 registrationDate
@@ -51,7 +51,7 @@ contract GlobalRegistry is IGlobalRegistry {
     struct Entity {
         string name;
         string location;
-        string licenseNumber;
+        string registrationNumber;
         Role role;
         bool isActive;
         uint256 registrationDate;
@@ -79,7 +79,7 @@ contract GlobalRegistry is IGlobalRegistry {
         entities[msg.sender] = Entity({
             name: "System Administrator",
             location: "N/A",
-            licenseNumber: "ADMIN",
+            registrationNumber: "ADMIN",
             role: Role.REGULATOR,
             isActive: true,
             registrationDate: block.timestamp
@@ -110,7 +110,7 @@ contract GlobalRegistry is IGlobalRegistry {
         entities[entityAddress] = Entity({
             name: name,
             location: location,
-            licenseNumber: license,
+            registrationNumber: license,
             role: role,
             isActive: true,
             registrationDate: block.timestamp
@@ -148,7 +148,7 @@ contract GlobalRegistry is IGlobalRegistry {
             revert GlobalRegistry__InvalidManufacturerAddress();
         }
 
-        return string(entity.licenseNumber);
+        return string(entity.registrationNumber);
     }
 
     /**
@@ -196,7 +196,7 @@ contract GlobalRegistry is IGlobalRegistry {
      * @param entityAddress Address of the entity
      * @return name Name of the entity
      * @return location Location of the entity
-     * @return licenseNumber License number of the entity
+     * @return registrationNumber License number of the entity
      * @return role Role of the entity
      * @return isActive Active status of the entity
      * @return registrationDate Registration date of the entity
@@ -208,7 +208,7 @@ contract GlobalRegistry is IGlobalRegistry {
         returns (
             string memory name,
             string memory location,
-            string memory licenseNumber,
+            string memory registrationNumber,
             Role role,
             bool isActive,
             uint256 registrationDate
@@ -219,7 +219,13 @@ contract GlobalRegistry is IGlobalRegistry {
         }
 
         Entity storage entity = entities[entityAddress];
-        return
-            (entity.name, entity.location, entity.licenseNumber, entity.role, entity.isActive, entity.registrationDate);
+        return (
+            entity.name,
+            entity.location,
+            entity.registrationNumber,
+            entity.role,
+            entity.isActive,
+            entity.registrationDate
+        );
     }
 }
