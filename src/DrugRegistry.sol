@@ -9,14 +9,14 @@ import {IGlobalRegistry} from "./GlobalRegistry.sol";
 
 contract DrugRegistry {
     // ================ ERRORS =================
-    error DrugRegistry__NotAuthorizedToPerformAction(IGlobalRegistry.Role role, IGlobalRegistry.Role optRole);
+    error DrugRegistry__SenderIsNotAuthorized(address sender);
+    error DrugRegistry__ReceiverIsNotEligible(address receiver);
     error DrugRegistry__MedicineExistenceStatus(string medicineId, bool exists);
     error DrugRegistry__BatchExistenceStatus(string batchId, bool exists);
     error DrugRegistry__BatchIsNotActive(string batchId);
     error DrugRegistry__InvalidGlobalRegistryContractAddress(address globalRegistryAddress);
     error DrugRegistry__MedicineApprovalStatus(string medicineId, bool approved);
-    error DrugRegistry__InsufficientInventoryQuantity(uint256 requestedQuantity, uint256 availableQuantity);
-    error DrugRegistry__InsufficientBatchQuantity(uint256 requestedQuantity, uint256 availableQuantity);
+    error DrugRegistry__SenderHasInsufficientQuantity(uint256 requestedQuantity, uint256 availableQuantity);
     error DrugRegistry__MinLengthRequired(string field, uint256 givenLength, uint256 minLength);
 
     // ================ STRUCTS ================
@@ -69,9 +69,7 @@ contract DrugRegistry {
     // ================ STATE VARIABLES ================
     IGlobalRegistry public globalRegistry;
 
-    uint256 public medicineCounter;
     mapping(string => Medicine) public medicines;
-    mapping(string => string) public medicineByName;
 
     mapping(string => Batch) public batches;
     mapping(string => string[]) public medicineBatches;
@@ -84,18 +82,18 @@ contract DrugRegistry {
 
     // ================ EVENTS ================
     event MedicineRegistered(string indexed medicineId, string name, address manufacturer);
-    event MedicineApproved(string medicineId);
-    event BatchCreated(string batchId, string medicineId, uint256 quantity);
-    event BatchDeactivated(string batchId, string reason);
-    event MedicineTransferred(string batchId, address from, address to, uint256 quantity);
+    event MedicineApproved(string indexed medicineId, address manufacturer);
+    event BatchCreated(string indexed batchId, string medicineId, uint256 quantity);
+    event BatchDeactivated(string indexed batchId, string reason);
+    event MedicineTransferred(string indexed batchId, address indexed from, address indexed to, uint256 quantity);
     event MedicineDispensed(string batchId, address pharmacy, string patientId, uint256 quantity);
     // TODO: Implement low inventory alert
     event LowInventoryAlert(string batchId, string name, uint256 quantity);
 
     // ================ MODIFIERS ================
     modifier onlyRole(IGlobalRegistry.Role role) {
-        if (!globalRegistry.verifyEntity(msg.sender) && globalRegistry.getEntityRole(msg.sender) != role) {
-            revert DrugRegistry__NotAuthorizedToPerformAction(role, IGlobalRegistry.Role.NONE);
+        if (!globalRegistry.verifyEntity(msg.sender) || globalRegistry.getEntityRole(msg.sender) != role) {
+            revert DrugRegistry__SenderIsNotAuthorized(msg.sender);
         }
         _;
     }
@@ -116,9 +114,7 @@ contract DrugRegistry {
 
     modifier onlyManufacturer(string memory medicineId) {
         if (medicines[medicineId].manufacturer != msg.sender) {
-            revert DrugRegistry__NotAuthorizedToPerformAction(
-                IGlobalRegistry.Role.MANUFACTURER, IGlobalRegistry.Role.NONE
-            );
+            revert DrugRegistry__SenderIsNotAuthorized(msg.sender);
         }
         _;
     }
@@ -128,7 +124,6 @@ contract DrugRegistry {
             revert DrugRegistry__InvalidGlobalRegistryContractAddress(globalRegistryAddress);
         }
         globalRegistry = IGlobalRegistry(globalRegistryAddress);
-        medicineCounter = 0;
     }
 
     /**
@@ -149,7 +144,10 @@ contract DrugRegistry {
             revert DrugRegistry__MinLengthRequired("Medicine Brand", bytes(brand).length, 2);
         }
 
-        medicineCounter++;
+        // check if the medicineId already exists
+        if (bytes(medicines[medicineId].medicineId).length != 0) {
+            revert DrugRegistry__MedicineExistenceStatus(medicineId, true);
+        }
 
         Medicine storage newMedicine = medicines[medicineId];
         newMedicine.medicineId = medicineId;
@@ -159,9 +157,6 @@ contract DrugRegistry {
         newMedicine.manufacturer = msg.sender;
         newMedicine.manufacturerId = globalRegistry.getManufacturerId(msg.sender);
         newMedicine.approved = false;
-
-        // FIXME: There are no checks of if the medicine name already exists, else, make it an array.
-        medicineByName[name] = medicineId;
 
         emit MedicineRegistered(medicineId, name, msg.sender);
 
@@ -182,7 +177,9 @@ contract DrugRegistry {
         }
 
         medicines[medicineId].approved = true;
-        emit MedicineApproved(medicineId);
+
+        address manufacturer = medicines[medicineId].manufacturer;
+        emit MedicineApproved(medicineId, manufacturer);
     }
 
     /**
@@ -251,21 +248,33 @@ contract DrugRegistry {
     }
 
     /**
-     * @dev Transfer medicine to a supplier
+     * @dev Transfer ownership of medicine
      * @param batchId ID of the batch
-     * @param supplierAddress Address of the supplier
+     * @param entityAddress Address of entity
      * @param quantity Quantity to transfer
      */
-    function transferToSupplier(string memory batchId, address supplierAddress, uint256 quantity)
+    function transferOwnership(string memory batchId, address entityAddress, uint256 quantity)
         public
         batchExists(batchId)
     {
-        // Only registered suppliers can receive medicine
-        if (
-            !globalRegistry.verifyEntity(supplierAddress)
-                && globalRegistry.getEntityRole(supplierAddress) != IGlobalRegistry.Role.SUPPLIER
-        ) {
-            revert DrugRegistry__NotAuthorizedToPerformAction(IGlobalRegistry.Role.SUPPLIER, IGlobalRegistry.Role.NONE);
+        // only registered entities can make transfers
+        if (!globalRegistry.verifyEntity(msg.sender)) {
+            revert DrugRegistry__SenderIsNotAuthorized(msg.sender);
+        }
+
+        IGlobalRegistry.Role role;
+        // verify receiver's address and role
+        if (globalRegistry.verifyEntity(entityAddress)) {
+            IGlobalRegistry.Role entityRole = globalRegistry.getEntityRole(entityAddress);
+
+            // cannot make transfer to regulator
+            if (entityRole != IGlobalRegistry.Role.REGULATOR) {
+                role = entityRole;
+            } else {
+                revert DrugRegistry__ReceiverIsNotEligible(entityAddress);
+            }
+        } else {
+            revert DrugRegistry__ReceiverIsNotEligible(entityAddress);
         }
 
         // Check if the quantity is valid
@@ -286,118 +295,37 @@ contract DrugRegistry {
             // Check if the batch has enough quantity
             uint256 batchRemainingQuantity = batch.remainingQuantity;
             if (batchRemainingQuantity < quantity) {
-                revert DrugRegistry__InsufficientBatchQuantity(quantity, batchRemainingQuantity);
+                revert DrugRegistry__SenderHasInsufficientQuantity(quantity, batchRemainingQuantity);
             }
             // Update batch
-            batchRemainingQuantity -= quantity;
-        }
-
-        // Check if the pharmacy has enough quantity
-        uint256 inventoryQuantity = inventory[msg.sender][medicineId];
-        if (inventoryQuantity < quantity) {
-            revert DrugRegistry__InsufficientInventoryQuantity(quantity, inventoryQuantity);
-        }
-
-        // Update inventories
-        inventoryQuantity -= quantity;
-        inventory[supplierAddress][medicineId] += quantity;
-
-        // Add supplier to medicine holders if this is their first stock
-        if (inventory[supplierAddress][medicineId] == quantity) {
-            medicineHolders[medicineId].push(supplierAddress);
-        }
-
-        // Record supply chain event
-        SupplyChainEvent memory newEvent = SupplyChainEvent({
-            medicineId: medicineId,
-            batchId: batchId,
-            eventType: EventType.TO_SUPPLIER,
-            fromEntity: msg.sender,
-            toEntity: supplierAddress,
-            quantity: quantity,
-            timestamp: block.timestamp,
-            patientId: ""
-        });
-
-        supplyChainEvents[medicineId].push(newEvent);
-        batchEvents[batchId].push(newEvent);
-
-        emit MedicineTransferred(batchId, msg.sender, supplierAddress, quantity);
-    }
-
-    /**
-     * @dev Transfer medicine to a pharmacy
-     * @param batchId ID of the batch
-     * @param pharmacyAddress Address of the pharmacy
-     * @param quantity Quantity to transfer
-     */
-    function transferToPharmacy(string memory batchId, address pharmacyAddress, uint256 quantity)
-        public
-        batchExists(batchId)
-    {
-        // Only registered pharmacies can receive medicine
-        if (
-            !globalRegistry.verifyEntity(pharmacyAddress)
-                && globalRegistry.getEntityRole(pharmacyAddress) != IGlobalRegistry.Role.PHARMACY
-        ) {
-            revert DrugRegistry__NotAuthorizedToPerformAction(IGlobalRegistry.Role.PHARMACY, IGlobalRegistry.Role.NONE);
-        }
-
-        // Only suppliers or manufacturers can transfer to pharmacies
-        if (
-            globalRegistry.getEntityRole(msg.sender) != IGlobalRegistry.Role.SUPPLIER
-                || globalRegistry.getEntityRole(msg.sender) != IGlobalRegistry.Role.MANUFACTURER
-        ) {
-            revert DrugRegistry__NotAuthorizedToPerformAction(
-                IGlobalRegistry.Role.SUPPLIER, IGlobalRegistry.Role.MANUFACTURER
-            );
-        }
-        // Check if the quantity is valid
-        if (quantity <= 0) {
-            revert DrugRegistry__MinLengthRequired("Medicine Quantity", quantity, 1);
-        }
-
-        Batch storage batch = batches[batchId];
-        string memory medicineId = batch.medicineId;
-
-        // Check if the batch is active
-        if (!batch.isActive) {
-            revert DrugRegistry__BatchIsNotActive(batchId);
-        }
-
-        // Check if the sender is the manufacturer, and if so, update the batch
-        if (medicines[medicineId].manufacturer == msg.sender) {
-            // Check if the batch has enough quantity
-            uint256 batchRemainingQuantity = batch.remainingQuantity;
-            if (batchRemainingQuantity < quantity) {
-                revert DrugRegistry__InsufficientBatchQuantity(quantity, batchRemainingQuantity);
-            }
-            // Update batch
-            batchRemainingQuantity -= quantity;
+            batch.remainingQuantity -= quantity;
         }
 
         // Check if the sender has enough quantity
         uint256 inventoryQuantity = inventory[msg.sender][medicineId];
         if (inventoryQuantity < quantity) {
-            revert DrugRegistry__InsufficientInventoryQuantity(quantity, inventoryQuantity);
+            revert DrugRegistry__SenderHasInsufficientQuantity(quantity, inventoryQuantity);
         }
 
         // Update inventories
-        inventoryQuantity -= quantity;
-        inventory[pharmacyAddress][medicineId] += quantity;
+        inventory[msg.sender][medicineId] -= quantity;
+        inventory[entityAddress][medicineId] += quantity;
 
         // Add pharmacy to medicine holders if this is their first stock
-        if (inventory[pharmacyAddress][medicineId] == quantity) {
-            medicineHolders[medicineId].push(pharmacyAddress);
+        if (inventory[entityAddress][medicineId] == quantity) {
+            medicineHolders[medicineId].push(entityAddress);
         }
+
+        // get event type based on receiver's role
+        EventType eventType = getEventType(role);
 
         // Record supply chain event
         SupplyChainEvent memory newEvent = SupplyChainEvent({
             medicineId: medicineId,
             batchId: batchId,
-            eventType: EventType.TO_PHARMACY,
+            eventType: eventType,
             fromEntity: msg.sender,
-            toEntity: pharmacyAddress,
+            toEntity: entityAddress,
             quantity: quantity,
             timestamp: block.timestamp,
             patientId: ""
@@ -406,7 +334,7 @@ contract DrugRegistry {
         supplyChainEvents[medicineId].push(newEvent);
         batchEvents[batchId].push(newEvent);
 
-        emit MedicineTransferred(batchId, msg.sender, pharmacyAddress, quantity);
+        emit MedicineTransferred(batchId, msg.sender, entityAddress, quantity);
     }
 
     /**
@@ -435,11 +363,11 @@ contract DrugRegistry {
         // Check if the pharmacy has enough quantity
         uint256 inventoryQuantity = inventory[msg.sender][medicineId];
         if (inventoryQuantity < quantity) {
-            revert DrugRegistry__InsufficientInventoryQuantity(quantity, inventoryQuantity);
+            revert DrugRegistry__SenderHasInsufficientQuantity(quantity, inventoryQuantity);
         }
 
         // Update inventories
-        inventoryQuantity -= quantity;
+        inventory[msg.sender][medicineId] -= quantity;
 
         // Record supply chain event
         SupplyChainEvent memory newEvent = SupplyChainEvent({
@@ -495,19 +423,6 @@ contract DrugRegistry {
             medicine.manufacturerId,
             medicine.approved
         );
-    }
-
-    /**
-     * @dev Get medicine details by name
-     * @param medicineName Name of the medicine
-     * @return Medicine struct containing medicine details
-     */
-    function getMedicineDetailsByName(string memory medicineName) public view returns (Medicine memory) {
-        string memory medicineId = medicineByName[medicineName];
-        if (bytes(medicineId).length == 0) {
-            revert DrugRegistry__MedicineExistenceStatus(medicineId, false);
-        }
-        return medicines[medicineId];
     }
 
     /**
@@ -650,10 +565,24 @@ contract DrugRegistry {
     }
 
     // TODO: Use Chainlink Automation to deactivate batches after expiry date
-    function deactivateBatch(string memory batchId) public {
-        Batch storage batch = batches[batchId];
-        if (batch.expiryDate < block.timestamp) {
-            batch.isActive = false;
+    function deactivateExpiredBatch(string memory batchId) public batchExists(batchId) {
+        if (block.timestamp >= batches[batchId].expiryDate && batches[batchId].isActive) {
+            batches[batchId].isActive = false;
+            emit BatchDeactivated(batchId, "Expired");
         }
+    }
+
+    // =========================== HELPER FUNCTION ===========================
+    function getEventType(IGlobalRegistry.Role role) internal pure returns (EventType) {
+        EventType eventType;
+        if (role == IGlobalRegistry.Role.MANUFACTURER) {
+            eventType = DrugRegistry.EventType.MANUFACTURED;
+        } else if (role == IGlobalRegistry.Role.SUPPLIER) {
+            eventType = DrugRegistry.EventType.TO_SUPPLIER;
+        } else if (role == IGlobalRegistry.Role.PHARMACY) {
+            eventType = DrugRegistry.EventType.TO_PHARMACY;
+        }
+
+        return eventType;
     }
 }
