@@ -23,6 +23,7 @@ interface IGlobalRegistry {
             string memory name,
             string memory location,
             string memory registrationNumber,
+            string memory license,
             Role role,
             bool isActive,
             uint256 registrationDate
@@ -52,12 +53,14 @@ contract GlobalRegistry is IGlobalRegistry {
         string name;
         string location;
         string registrationNumber;
+        string license;
         Role role;
         bool isActive;
         uint256 registrationDate;
     }
 
     address public owner;
+    address[] public entityAddresses;
     mapping(address => Entity) public entities;
 
     // ================ EVENTS ================
@@ -80,11 +83,13 @@ contract GlobalRegistry is IGlobalRegistry {
             name: "System Administrator",
             location: "N/A",
             registrationNumber: "ADMIN",
+            license: "ADMIN",
             role: Role.REGULATOR,
             isActive: true,
             registrationDate: block.timestamp
         });
 
+        entityAddresses.push(msg.sender);
         emit EntityRegistered(msg.sender, Role.REGULATOR, "System Administrator");
     }
 
@@ -101,7 +106,8 @@ contract GlobalRegistry is IGlobalRegistry {
         Role role,
         string memory name,
         string memory location,
-        string memory license
+        string memory license,
+        string memory registrationNumber
     ) public onlyOwner {
         if (entities[entityAddress].role != Role.NONE) {
             revert GlobalRegistry__EntityAlreadyRegistered(entityAddress, entities[entityAddress].role);
@@ -110,11 +116,15 @@ contract GlobalRegistry is IGlobalRegistry {
         entities[entityAddress] = Entity({
             name: name,
             location: location,
-            registrationNumber: license,
+            registrationNumber: registrationNumber,
+            license: license,
             role: role,
             isActive: true,
             registrationDate: block.timestamp
         });
+
+        // Add the entity address to the list of registered entities
+        entityAddresses.push(entityAddress);
 
         emit EntityRegistered(entityAddress, role, name);
     }
@@ -197,6 +207,7 @@ contract GlobalRegistry is IGlobalRegistry {
      * @return name Name of the entity
      * @return location Location of the entity
      * @return registrationNumber License number of the entity
+     * @return license License number of the entity
      * @return role Role of the entity
      * @return isActive Active status of the entity
      * @return registrationDate Registration date of the entity
@@ -209,6 +220,7 @@ contract GlobalRegistry is IGlobalRegistry {
             string memory name,
             string memory location,
             string memory registrationNumber,
+            string memory license,
             Role role,
             bool isActive,
             uint256 registrationDate
@@ -223,9 +235,26 @@ contract GlobalRegistry is IGlobalRegistry {
             entity.name,
             entity.location,
             entity.registrationNumber,
+            entity.license,
             entity.role,
             entity.isActive,
             entity.registrationDate
         );
+    }
+
+    /**
+     * @dev Get the number of registered entities
+     * @return uint256 Number of registered entities
+     */
+    function getRegisteredEntityCount() external view returns (uint256) {
+        return entityAddresses.length;
+    }
+
+    /**
+     * @dev Get the list of registered entity addresses
+     * @return address[] List of registered entity addresses
+     */
+    function getRegisteredEntityAddresses() external view returns (address[] memory) {
+        return entityAddresses;
     }
 }

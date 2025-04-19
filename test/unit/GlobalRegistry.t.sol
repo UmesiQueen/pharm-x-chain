@@ -23,7 +23,7 @@ contract GlobalRegistryTest is Test {
     modifier registerEntity() {
         vm.prank(REGULATOR);
         globalRegistry.registerEntity(
-            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123"
+            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123", "L-1234"
         );
         _;
     }
@@ -34,7 +34,7 @@ contract GlobalRegistryTest is Test {
         assertEq(globalRegistry.owner(), REGULATOR);
 
         // Check deployer details
-        (,,, IGlobalRegistry.Role role,,) = globalRegistry.getEntityDetails(REGULATOR);
+        (,,,, IGlobalRegistry.Role role,,) = globalRegistry.getEntityDetails(REGULATOR);
         assertEq(uint256(role), uint256(IGlobalRegistry.Role.REGULATOR));
     }
 
@@ -44,7 +44,7 @@ contract GlobalRegistryTest is Test {
 
         vm.expectRevert(GlobalRegistry.GlobalRegistry__SenderIsNotOwner.selector);
         globalRegistry.registerEntity(
-            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123"
+            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123", "L-1234"
         );
     }
 
@@ -55,6 +55,16 @@ contract GlobalRegistryTest is Test {
     function testGetEntityRole() public registerEntity {
         IGlobalRegistry.Role role = globalRegistry.getEntityRole(MANUFACTURER);
         assertEq(uint256(role), uint256(IGlobalRegistry.Role.MANUFACTURER));
+    }
+
+    function testGetRegisteredEntityCount() public view {
+        assertEq(globalRegistry.getRegisteredEntityCount(), 1);
+    }
+
+    function testGetRegisteredEntityAddresses() public registerEntity {
+        address[] memory registeredEntities = globalRegistry.getRegisteredEntityAddresses();
+        assertEq(registeredEntities.length, 2);
+        assertEq(registeredEntities[1], MANUFACTURER);
     }
 
     // ================ REVERT TESTS ================
@@ -68,7 +78,7 @@ contract GlobalRegistryTest is Test {
         vm.startPrank(REGULATOR);
         globalRegistry.deactivateEntity(MANUFACTURER);
 
-        (,,,, bool isActive,) = (globalRegistry.getEntityDetails(MANUFACTURER));
+        (,,,,, bool isActive,) = (globalRegistry.getEntityDetails(MANUFACTURER));
 
         vm.expectRevert(
             abi.encodeWithSelector(
@@ -99,7 +109,7 @@ contract GlobalRegistryTest is Test {
             )
         );
         globalRegistry.registerEntity(
-            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123"
+            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123", "L-1234"
         );
     }
 
@@ -111,7 +121,7 @@ contract GlobalRegistryTest is Test {
         emit GlobalRegistry.EntityRegistered(MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1");
 
         globalRegistry.registerEntity(
-            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123"
+            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Manufacturer1", "flic-en-flac", "MFR123", "L-1234"
         );
     }
 
