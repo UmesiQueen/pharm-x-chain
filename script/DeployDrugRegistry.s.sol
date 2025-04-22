@@ -18,6 +18,9 @@ contract DeployDrugRegistry is Script {
     function run() external {
         // Get most recent GlobalRegistry deployment address
         address mostRecentGlobalRegistry = DevOpsTools.get_most_recent_deployment("GlobalRegistry", block.chainid);
+        console2.log("Most recent GlobalRegistry address:", mostRecentGlobalRegistry);
+
+        // Deploy DrugRegistry with the most recent GlobalRegistry address
         deployDrugRegistry(mostRecentGlobalRegistry);
     }
 }

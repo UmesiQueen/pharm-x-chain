@@ -31,11 +31,13 @@ contract DrugRegistryTest is Test {
 
         // register entities
         globalRegistry.registerEntity(
-            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Russels", "flic en flac", "MFG201"
+            MANUFACTURER, IGlobalRegistry.Role.MANUFACTURER, "Russels", "flic en flac", "MFG201", "L-1234"
         );
-        globalRegistry.registerEntity(SUPPLIER, IGlobalRegistry.Role.SUPPLIER, "De Bronx", "flic en flac", "SPL123");
         globalRegistry.registerEntity(
-            PHARMACY, IGlobalRegistry.Role.PHARMACY, "Clinique du nord", "port louis", "PHA001"
+            SUPPLIER, IGlobalRegistry.Role.SUPPLIER, "De Bronx", "flic en flac", "SPL123", "L-1234"
+        );
+        globalRegistry.registerEntity(
+            PHARMACY, IGlobalRegistry.Role.PHARMACY, "Clinique du nord", "port louis", "PHA001", "L-1234"
         );
         drugRegistry = new DrugRegistry(address(globalRegistry));
         console2.log("DrugRegistry address: ", address(drugRegistry));
@@ -161,7 +163,7 @@ contract DrugRegistryTest is Test {
 
         vm.expectEmit(true, false, false, true);
         emit DrugRegistry.BatchDeactivated(_batchId, "Expired");
-        drugRegistry.deactivateExpiredBatch(_batchId);
+        drugRegistry.deactivateExpiredBatch();
 
         // check if batch is deactivated
         DrugRegistry.Batch memory batch = drugRegistry.getBatchDetails(_batchId);
@@ -232,17 +234,13 @@ contract DrugRegistryTest is Test {
     }
 
     function testRevertWithBatchIsNotActive() public registerAndApproveMedicine createBatch {
-        // set timestamp to 2 years in the future
-        vm.warp(block.timestamp + interval + 1);
-        //  Set block.number
-        vm.roll(block.number + 1);
-
+        vm.startPrank(MANUFACTURER);
         // deactivate batch
-        drugRegistry.deactivateExpiredBatch(_batchId);
+        drugRegistry.deactivateBatch(_batchId, _medicineId);
 
-        vm.prank(MANUFACTURER);
         vm.expectRevert(abi.encodeWithSelector(DrugRegistry.DrugRegistry__BatchIsNotActive.selector, _batchId));
         drugRegistry.transferOwnership(_batchId, SUPPLIER, 200);
+        vm.stopPrank();
     }
 
     function testRevertWithMedicineIsAlreadyApproved() public registerAndApproveMedicine {
@@ -361,7 +359,7 @@ contract DrugRegistryTest is Test {
 
         vm.prank(REGULATOR);
         globalRegistry.registerEntity(
-            PHARMACY2, IGlobalRegistry.Role.PHARMACY, "Rose Hill Clinic", "port louis", "PHA001"
+            PHARMACY2, IGlobalRegistry.Role.PHARMACY, "Rose Hill Clinic", "port louis", "PHA001", "L-1234"
         );
 
         // transfer from manufacturer to pharmacy
@@ -390,8 +388,24 @@ contract DrugRegistryTest is Test {
             console2.log("Pharmacy ", i + 1);
             console2.log("Address: ", pharmacyStock[i].pharmacyAddress);
             console2.log("Name: ", pharmacyStock[i].pharmacyName);
-            console2.log("Location: ", pharmacyStock[i].location);
+            console2.log("Location: ", pharmacyStock[i].pharmacyLocation);
+            console2.log("BatchId: ", pharmacyStock[i].batchId);
             console2.log("Available Quantity: ", pharmacyStock[i].availableQuantity);
+        }
+    }
+
+    function testGetMedicineHolders() public registerAndApproveMedicine createBatch {
+        // transfer from manufacturer to pharmacy
+        vm.prank(MANUFACTURER);
+        drugRegistry.transferOwnership(_batchId, PHARMACY, 100);
+
+        DrugRegistry.MedicineHolder[] memory medicineHolders = drugRegistry.getMedicineHolders(_medicineId);
+
+        assertEq(medicineHolders.length, 2);
+
+        for (uint256 i = 0; i < medicineHolders.length; i++) {
+            console2.log("Batch ID: ", medicineHolders[i].holderAddress);
+            console2.log("Batch ID: ", medicineHolders[i].batchId);
         }
     }
 
@@ -439,6 +453,15 @@ contract DrugRegistryTest is Test {
         assertEq(batchEvents.length, 2);
     }
 
+    function testGetBatchCount() public registerAndApproveMedicine createBatch {
+        // Create 2nd batch
+        vm.prank(MANUFACTURER);
+        drugRegistry.createBatch(_medicineId, "B1-PAE02", _quantity, _productionDate, _expiryDate);
+
+        uint256 batchCount = drugRegistry.getBatchCount();
+        assertEq(batchCount, 2);
+    }
+
     // =========================== EVENTS ===========================
     function testEmitsMedicineRegisteredEvent() public {
         vm.prank(MANUFACTURER);
@@ -480,6 +503,22 @@ contract DrugRegistryTest is Test {
         vm.expectEmit(false, false, false, false);
         emit DrugRegistry.MedicineDispensed(_batchId, PHARMACY, "P-1033", 1);
         drugRegistry.dispenseMedicine(_batchId, 100, "P-1033");
+    }
+
+    function testEmitsLowInventoryAlert() public registerAndApproveMedicine createBatch {
+        // transfer from manufacturer to pharmacy
+        vm.prank(MANUFACTURER);
+        drugRegistry.transferOwnership(_batchId, PHARMACY, 100);
+
+        vm.prank(PHARMACY);
+        vm.expectEmit(true, true, true, true);
+        emit DrugRegistry.LowInventoryAlert(PHARMACY, _batchId, 10);
+        emit DrugRegistry.MedicineDispensed(_batchId, PHARMACY, "P-1033", 90);
+        drugRegistry.dispenseMedicine(_batchId, 90, "P-1033");
+
+        uint256 remainingQty = drugRegistry.getInventory(PHARMACY, _medicineId);
+        assert(remainingQty == 10);
+        console2.log("Remaining Quantity: ", remainingQty);
     }
 
     // =========================== HELPER FUNCTION ===========================

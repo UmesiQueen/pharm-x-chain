@@ -42,9 +42,10 @@ contract DrugRegistry {
     }
 
     struct PharmacyStock {
+        string batchId;
         address pharmacyAddress;
         string pharmacyName;
-        string location;
+        string pharmacyLocation;
         uint256 availableQuantity;
     }
 
@@ -69,8 +70,10 @@ contract DrugRegistry {
     // ================ STATE VARIABLES ================
     IGlobalRegistry public globalRegistry;
 
-    mapping(string => Medicine) public medicines;
+    string[] public medicineIds;
+    string[] public batchIds;
 
+    mapping(string => Medicine) public medicines;
     mapping(string => Batch) public batches;
     mapping(string => string[]) public medicineBatches;
 
@@ -78,7 +81,14 @@ contract DrugRegistry {
     mapping(string => SupplyChainEvent[]) public batchEvents;
 
     mapping(address => mapping(string => uint256)) public inventory;
-    mapping(string => address[]) public medicineHolders;
+
+    // Define a struct to hold both address and batchID
+    struct MedicineHolder {
+        address holderAddress;
+        string batchId; // Or use uint if your batchID is numeric
+    }
+
+    mapping(string => MedicineHolder[]) public medicineHolders;
 
     // ================ EVENTS ================
     event MedicineRegistered(string indexed medicineId, string name, address manufacturer);
@@ -86,9 +96,10 @@ contract DrugRegistry {
     event BatchCreated(string indexed batchId, string medicineId, uint256 quantity);
     event BatchDeactivated(string indexed batchId, string reason);
     event MedicineTransferred(string indexed batchId, address indexed from, address indexed to, uint256 quantity);
-    event MedicineDispensed(string batchId, address pharmacy, string patientId, uint256 quantity);
-    // TODO: Implement low inventory alert
-    event LowInventoryAlert(string batchId, string name, uint256 quantity);
+    event MedicineDispensed(
+        string indexed batchId, address indexed pharmacy, string indexed patientId, uint256 quantity
+    );
+    event LowInventoryAlert(address indexed medicineHolder, string indexed batchId, uint256 indexed quantity);
 
     // ================ MODIFIERS ================
     modifier onlyRole(IGlobalRegistry.Role role) {
@@ -158,6 +169,9 @@ contract DrugRegistry {
         newMedicine.manufacturerId = globalRegistry.getManufacturerId(msg.sender);
         newMedicine.approved = false;
 
+        // Add to the list of registered medicines
+        medicineIds.push(medicineId);
+
         emit MedicineRegistered(medicineId, name, msg.sender);
 
         return medicineId;
@@ -224,7 +238,8 @@ contract DrugRegistry {
         // Add to manufacturer's inventory
         inventory[msg.sender][medicineId] += quantity;
         if (inventory[msg.sender][medicineId] == quantity) {
-            medicineHolders[medicineId].push(msg.sender);
+            MedicineHolder memory newHolder = MedicineHolder({holderAddress: msg.sender, batchId: batchId});
+            medicineHolders[medicineId].push(newHolder);
         }
 
         // Record supply chain event
@@ -241,6 +256,7 @@ contract DrugRegistry {
 
         supplyChainEvents[medicineId].push(newEvent);
         batchEvents[batchId].push(newEvent);
+        batchIds.push(batchId);
 
         emit BatchCreated(batchId, medicineId, quantity);
 
@@ -311,9 +327,16 @@ contract DrugRegistry {
         inventory[msg.sender][medicineId] -= quantity;
         inventory[entityAddress][medicineId] += quantity;
 
-        // Add pharmacy to medicine holders if this is their first stock
+        // emit low stock event if quantity is less than 10
+        uint256 sendersInventory = inventory[msg.sender][medicineId];
+        if (sendersInventory <= 10) {
+            emit LowInventoryAlert(msg.sender, batchId, sendersInventory);
+        }
+
+        // Add entity to medicine holders if this is their first stock
         if (inventory[entityAddress][medicineId] == quantity) {
-            medicineHolders[medicineId].push(entityAddress);
+            MedicineHolder memory newHolder = MedicineHolder({holderAddress: entityAddress, batchId: batchId});
+            medicineHolders[medicineId].push(newHolder);
         }
 
         // get event type based on receiver's role
@@ -368,6 +391,12 @@ contract DrugRegistry {
 
         // Update inventories
         inventory[msg.sender][medicineId] -= quantity;
+
+        // emit low stock event if quantity is less than 10
+        uint256 sendersInventory = inventory[msg.sender][medicineId];
+        if (sendersInventory <= 10) {
+            emit LowInventoryAlert(msg.sender, batchId, sendersInventory);
+        }
 
         // Record supply chain event
         SupplyChainEvent memory newEvent = SupplyChainEvent({
@@ -449,43 +478,56 @@ contract DrugRegistry {
      * @param medicineId ID of the medicine
      * @return PharmacyStock[] Array of PharmacyStock structs
      */
-    function getPharmacyAvailability(string memory medicineId)
+    function getPharmacyAvailability(string calldata medicineId)
         public
         view
         medicineExists(medicineId)
         returns (PharmacyStock[] memory)
     {
-        address[] memory holders = medicineHolders[medicineId];
-        uint256 pharmacyCount = 0;
+        MedicineHolder[] storage holders = medicineHolders[medicineId];
+        uint256 holdersLength = holders.length;
 
-        // Count pharmacies with stock
-        for (uint256 i = 0; i < holders.length; i++) {
+        // First count valid pharmacies to size our array properly
+        uint256 pharmacyCount = 0;
+        for (uint256 i = 0; i < holdersLength; i++) {
+            address holderAddress = holders[i].holderAddress;
+            Batch storage batch = batches[holders[i].batchId]; // get and check that batch is active
             if (
-                globalRegistry.verifyEntity(holders[i])
-                    && globalRegistry.getEntityRole(holders[i]) == IGlobalRegistry.Role.PHARMACY
-                    && inventory[holders[i]][medicineId] > 0
+                globalRegistry.verifyEntity(holderAddress)
+                    && globalRegistry.getEntityRole(holderAddress) == IGlobalRegistry.Role.PHARMACY
+                    && inventory[holderAddress][medicineId] > 0 && batch.isActive
             ) {
                 pharmacyCount++;
             }
         }
 
-        PharmacyStock[] memory result = new PharmacyStock[](pharmacyCount);
-        uint256 resultIndex = 0;
+        // If no pharmacies have stock, return early
+        if (pharmacyCount == 0) {
+            return new PharmacyStock[](0);
+        }
 
-        // Populate result array
-        for (uint256 i = 0; i < holders.length; i++) {
+        PharmacyStock[] memory result = new PharmacyStock[](pharmacyCount);
+
+        // Only if we have results to return, do the second loop
+        uint256 resultIndex = 0;
+        for (uint256 i = 0; i < holdersLength; i++) {
+            address holderAddress = holders[i].holderAddress;
+            uint256 medicineStock = inventory[holderAddress][medicineId];
+            Batch storage batch = batches[holders[i].batchId]; // get and check that batch is active
+
             if (
-                globalRegistry.verifyEntity(holders[i])
-                    && globalRegistry.getEntityRole(holders[i]) == IGlobalRegistry.Role.PHARMACY
-                    && inventory[holders[i]][medicineId] > 0
+                globalRegistry.verifyEntity(holderAddress)
+                    && globalRegistry.getEntityRole(holderAddress) == IGlobalRegistry.Role.PHARMACY && medicineStock > 0
+                    && batch.isActive
             ) {
-                (string memory name, string memory location,,,,) = globalRegistry.getEntityDetails(holders[i]);
+                (string memory name, string memory location,,,,,) = globalRegistry.getEntityDetails(holderAddress);
 
                 result[resultIndex] = PharmacyStock({
-                    pharmacyAddress: holders[i],
+                    pharmacyAddress: holderAddress,
                     pharmacyName: name,
-                    location: location,
-                    availableQuantity: inventory[holders[i]][medicineId]
+                    pharmacyLocation: location,
+                    batchId: holders[i].batchId,
+                    availableQuantity: medicineStock
                 });
 
                 resultIndex++;
@@ -493,6 +535,15 @@ contract DrugRegistry {
         }
 
         return result;
+    }
+
+    /**
+     * @dev Get all holders of a specific medicine
+     * @param medicineId ID of the medicine
+     * @return MedicineHolder[] Array of MedicineHolder structs
+     */
+    function getMedicineHolders(string memory medicineId) public view returns (MedicineHolder[] memory) {
+        return medicineHolders[medicineId];
     }
 
     /**
@@ -564,15 +615,64 @@ contract DrugRegistry {
         return batchEvents[batchId];
     }
 
-    // TODO: Use Chainlink Automation to deactivate batches after expiry date
-    function deactivateExpiredBatch(string memory batchId) public batchExists(batchId) {
-        if (block.timestamp >= batches[batchId].expiryDate && batches[batchId].isActive) {
-            batches[batchId].isActive = false;
-            emit BatchDeactivated(batchId, "Expired");
-        }
+    /**
+     * @dev Get the number of medicines created
+     * @return uint256 Number of medicines
+     */
+    function getMedicineCount() public view returns (uint256) {
+        return medicineIds.length;
+    }
+    /**
+     * @dev Get the number of batches created
+     * @return uint256 Number of batches
+     */
+
+    function getBatchCount() public view returns (uint256) {
+        return batchIds.length;
     }
 
+    /**
+     * @dev Deactivate a batch
+     * @param batchId ID of the batch
+     * @param medicineId ID of the medicine
+     */
+    function deactivateBatch(string memory batchId, string memory medicineId)
+        public
+        onlyManufacturer(medicineId)
+        batchExists(batchId)
+    {
+        if (batches[batchId].isActive) {
+            batches[batchId].isActive = false;
+            emit BatchDeactivated(batchId, "Deactivated by Manufacturer");
+        }
+    }
+    /**
+     * @dev Deactivate expired batches
+     * @dev It iterates through all batch IDs and checks if the current timestamp is greater than the expiry date.
+     * This function is called by ChainLinks Automation to deactivate expired batches. Time-based trigger (24 hours) check.
+     * @notice This function deactivates all expired batches in the registry.
+     */
+
+    function deactivateExpiredBatch() public {
+        if (batchIds.length > 0) {
+            for (uint256 i = 0; i < batchIds.length; i++) {
+                string memory batchId = batchIds[i];
+                Batch storage batch = batches[batchId];
+
+                // Only check active batches
+                if (batch.isActive) {
+                    // Check if the batch has expired
+                    if (block.timestamp > batch.expiryDate) {
+                        // Deactivate expired batch
+                        batch.isActive = false;
+                        emit BatchDeactivated(batchId, "Expired");
+                    }
+                }
+            }
+        }
+    }
     // =========================== HELPER FUNCTION ===========================
+
     function getEventType(IGlobalRegistry.Role role) internal pure returns (EventType) {
         EventType eventType;
         if (role == IGlobalRegistry.Role.MANUFACTURER) {
