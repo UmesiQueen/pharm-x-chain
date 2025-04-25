@@ -21,6 +21,9 @@ contract SupplyChainRegistryTest is Test {
     string public _name = "Paracetamol";
     string public _brand = "Exzol";
     string public _medicineId = "M-PAE01";
+    string public _serialNo = "563-58d9-7e13";
+    string public _ingredients = "Ascorbic Acid 250mg, calcium stearate 30g ";
+    string public _details = "Maybe cause drowsiness";
     string public _batchId = "B1-PAE01";
     uint256 public _quantity = 4000;
     uint256 public _productionDate = block.timestamp;
@@ -57,7 +60,7 @@ contract SupplyChainRegistryTest is Test {
 
     modifier registerAndApproveMedicine() {
         vm.prank(MANUFACTURER);
-        drugRegistry.registerMedicine(_medicineId, _name, _brand);
+        drugRegistry.registerMedicine(_medicineId, _serialNo, _name, _brand, _ingredients, _details);
         console2.log("Medicine registered with Id: ", _medicineId);
 
         // approve registered medicine
@@ -77,8 +80,36 @@ contract SupplyChainRegistryTest is Test {
         _;
     }
 
-    //TODO:
-    function test_InitializeBatchInventory() public {}
+    function test_InitializeBatchInventory() public registerAndApproveMedicine {
+        // First check that the manufacturer has no available quantity before batch initialization
+        uint256 manufacturerInventory = supplyChainRegistry.getInventory(MANUFACTURER, _medicineId);
+        assertEq(manufacturerInventory, 0);
+
+        // Create batch
+        vm.prank(MANUFACTURER);
+        drugRegistry.createBatch(_medicineId, _batchId, _quantity, _productionDate, _expiryDate);
+
+        // Check that manufacturer inventory is updated
+        manufacturerInventory = supplyChainRegistry.getInventory(MANUFACTURER, _medicineId);
+        assertEq(manufacturerInventory, _quantity);
+
+        // Check that MANUFACTURER has this medicineId in its list
+        string[] memory manufacturerMedicineIds = supplyChainRegistry.getAddressMedicineIds(MANUFACTURER);
+        bool found = false;
+        for (uint256 i = 0; i < manufacturerMedicineIds.length; i++) {
+            if (keccak256(bytes(manufacturerMedicineIds[i])) == keccak256(bytes(_medicineId))) {
+                found = true;
+                break;
+            }
+        }
+        assertTrue(found);
+
+        // Verify supply chain event was recorded accurately
+        SupplyChainRegistry.SupplyChainEvent[] memory events = supplyChainRegistry.getSupplyChainHistory(_medicineId);
+        assertEq(events.length, 1, "Should be one supply chain event after batch creation");
+        assertEq(events[0].quantity, _quantity, "Event quantity should match batch quantity");
+        assertEq(events[0].toEntity, MANUFACTURER, "Event recipient should be manufacturer");
+    }
 
     function test_TransferOwnership() public registerAndApproveMedicine createBatch {
         // transfer from manufacturer to supplier
@@ -117,9 +148,182 @@ contract SupplyChainRegistryTest is Test {
         console2.log(eventTypeStr, "eventType");
     }
 
+    function test_ComplexSupplyChainFlow() public registerAndApproveMedicine createBatch {
+        // MANUFACTURER -> SUPPLIER (2000)
+        vm.prank(MANUFACTURER);
+        supplyChainRegistry.transferOwnership(_batchId, SUPPLIER, 2000);
+
+        // MANUFACTURER -> PHARMACY (1000)
+        vm.prank(MANUFACTURER);
+        supplyChainRegistry.transferOwnership(_batchId, PHARMACY, 1000);
+
+        // Check inventories after initial transfers
+        assertEq(supplyChainRegistry.getInventory(MANUFACTURER, _medicineId), 1000);
+        assertEq(supplyChainRegistry.getInventory(SUPPLIER, _medicineId), 2000);
+        assertEq(supplyChainRegistry.getInventory(PHARMACY, _medicineId), 1000);
+
+        // SUPPLIER -> PHARMACY (500)
+        vm.prank(SUPPLIER);
+        supplyChainRegistry.transferOwnership(_batchId, PHARMACY, 500);
+
+        // Check inventories after supplier transfer
+        assertEq(supplyChainRegistry.getInventory(SUPPLIER, _medicineId), 1500);
+        assertEq(supplyChainRegistry.getInventory(PHARMACY, _medicineId), 1500);
+
+        // PHARMACY dispenses medicine (800)
+        vm.prank(PHARMACY);
+        supplyChainRegistry.dispenseMedicine(_batchId, 800, patientId);
+
+        // Check pharmacy inventory after dispensing
+        assertEq(supplyChainRegistry.getInventory(PHARMACY, _medicineId), 700);
+
+        // PHARMACY dispenses all remaining medicine (700)
+        vm.prank(PHARMACY);
+        supplyChainRegistry.dispenseMedicine(_batchId, 700, patientId);
+
+        // Check pharmacy inventory is zero and medicineId is removed from its list
+        assertEq(supplyChainRegistry.getInventory(PHARMACY, _medicineId), 0);
+
+        string[] memory pharmacyMedicineIds = supplyChainRegistry.getAddressMedicineIds(PHARMACY);
+        bool found = false;
+        for (uint256 i = 0; i < pharmacyMedicineIds.length; i++) {
+            if (keccak256(bytes(pharmacyMedicineIds[i])) == keccak256(bytes(_medicineId))) {
+                found = true;
+                break;
+            }
+        }
+        assertFalse(found, "MedicineId should be removed from pharmacy's list after dispensing all inventory");
+
+        // Check that supplier and manufacturer still have their medicine
+        assertTrue(supplyChainRegistry.getInventory(SUPPLIER, _medicineId) > 0);
+        assertTrue(supplyChainRegistry.getInventory(MANUFACTURER, _medicineId) > 0);
+    }
+
     function test_VerifyAuthenticity() public view {
         bool isAuthentic = supplyChainRegistry.verifyAuthenticity("INVALID_ID");
         assertFalse(isAuthentic);
+    }
+
+    function test_AddressMedicineIdsAddedOnBatchInitialization() public registerAndApproveMedicine createBatch {
+        // After batch initialization, manufacturer should have the medicineId in their list
+        string[] memory manufacturerMedicineIds = supplyChainRegistry.getAddressMedicineIds(MANUFACTURER);
+
+        // Check that the list exists and has the correct medicineId
+        assertEq(manufacturerMedicineIds.length, 1);
+        assertEq(manufacturerMedicineIds[0], _medicineId);
+
+        console2.log("Manufacturer has medicineId after batch initialization: ", manufacturerMedicineIds[0]);
+    }
+
+    function test_AddressMedicineIdsAddedOnTransfer() public registerAndApproveMedicine createBatch {
+        // Transfer medicine to supplier
+        vm.prank(MANUFACTURER);
+        supplyChainRegistry.transferOwnership(_batchId, SUPPLIER, 200);
+
+        // Check supplier's medicineIds list
+        string[] memory supplierMedicineIds = supplyChainRegistry.getAddressMedicineIds(SUPPLIER);
+
+        // Verify supplier now has the medicineId
+        assertEq(supplierMedicineIds.length, 1);
+        assertEq(supplierMedicineIds[0], _medicineId);
+
+        console2.log("Supplier has medicineId after transfer: ", supplierMedicineIds[0]);
+    }
+
+    function test_NoDuplicateMedicineIds() public registerAndApproveMedicine createBatch {
+        // Register another batch of the same medicine
+        string memory secondBatchId = "B2-PAE01";
+
+        vm.prank(MANUFACTURER);
+        drugRegistry.createBatch(_medicineId, secondBatchId, _quantity, _productionDate, _expiryDate);
+
+        // Now manufacturer should still only have one entry for this medicineId
+        string[] memory manufacturerMedicineIds = supplyChainRegistry.getAddressMedicineIds(MANUFACTURER);
+
+        assertEq(manufacturerMedicineIds.length, 1, "Should not have duplicate medicineIds");
+        assertEq(manufacturerMedicineIds[0], _medicineId);
+
+        console2.log(
+            "Manufacturer has correct number of medicineIds after multiple batches: ", manufacturerMedicineIds.length
+        );
+    }
+
+    function test_MultipleMedicineIdsPerAddress() public {
+        // Register first medicine and batch
+        vm.startPrank(MANUFACTURER);
+        drugRegistry.registerMedicine(_medicineId, _serialNo, _name, _brand, _ingredients, _details);
+        vm.stopPrank();
+
+        vm.prank(REGULATOR);
+        drugRegistry.approveMedicine(_medicineId);
+
+        vm.prank(MANUFACTURER);
+        drugRegistry.createBatch(_medicineId, _batchId, _quantity, _productionDate, _expiryDate);
+
+        // Register second medicine and batch
+        string memory secondMedicineId = "M-IBU01";
+        string memory secondBatchId = "B1-IBU01";
+
+        vm.startPrank(MANUFACTURER);
+        drugRegistry.registerMedicine(secondMedicineId, "345-4228-4232", "Ibuprofen", "Advil", _ingredients, _details);
+        vm.stopPrank();
+
+        vm.prank(REGULATOR);
+        drugRegistry.approveMedicine(secondMedicineId);
+
+        vm.prank(MANUFACTURER);
+        drugRegistry.createBatch(secondMedicineId, secondBatchId, _quantity, _productionDate, _expiryDate);
+
+        // Now check manufacturer has both medicineIds
+        string[] memory manufacturerMedicineIds = supplyChainRegistry.getAddressMedicineIds(MANUFACTURER);
+
+        assertEq(manufacturerMedicineIds.length, 2, "Should have two distinct medicineIds");
+
+        // Check that both medicine IDs are present (order might vary)
+        bool foundFirst = false;
+        bool foundSecond = false;
+
+        for (uint256 i = 0; i < manufacturerMedicineIds.length; i++) {
+            if (keccak256(bytes(manufacturerMedicineIds[i])) == keccak256(bytes(_medicineId))) {
+                foundFirst = true;
+            }
+            if (keccak256(bytes(manufacturerMedicineIds[i])) == keccak256(bytes(secondMedicineId))) {
+                foundSecond = true;
+            }
+        }
+
+        assertTrue(foundFirst, "First medicineId should be in the list");
+        assertTrue(foundSecond, "Second medicineId should be in the list");
+
+        console2.log("Manufacturer has multiple medicineIds: ", manufacturerMedicineIds.length);
+        for (uint256 i = 0; i < manufacturerMedicineIds.length; i++) {
+            console2.log("MedicineId ", i, ": ", manufacturerMedicineIds[i]);
+        }
+    }
+
+    function test_MedicineIdRemovedOnCompleteTransfer() public registerAndApproveMedicine createBatch {
+        // Transfer all inventory to supplier
+        vm.prank(MANUFACTURER);
+        supplyChainRegistry.transferOwnership(_batchId, SUPPLIER, _quantity);
+
+        // Check that MANUFACTURER's inventory is now 0
+        uint256 manufacturerInventory = supplyChainRegistry.getInventory(MANUFACTURER, _medicineId);
+        assertEq(manufacturerInventory, 0, "Manufacturer inventory should be 0 after complete transfer");
+
+        // Check that medicineId is removed from MANUFACTURER's list
+        string[] memory manufacturerMedicineIds = supplyChainRegistry.getAddressMedicineIds(MANUFACTURER);
+        bool found = false;
+        for (uint256 i = 0; i < manufacturerMedicineIds.length; i++) {
+            if (keccak256(bytes(manufacturerMedicineIds[i])) == keccak256(bytes(_medicineId))) {
+                found = true;
+                break;
+            }
+        }
+        assertFalse(found, "MedicineId should be removed from manufacturer's list after complete transfer");
+
+        // Check that SUPPLIER received the full inventory
+        uint256 supplierInventory = supplyChainRegistry.getInventory(SUPPLIER, _medicineId);
+        assertEq(supplierInventory, _quantity, "Supplier should have received the full inventory");
     }
 
     // =========================== REVERTS ===========================
@@ -177,6 +381,19 @@ contract SupplyChainRegistryTest is Test {
             )
         );
         supplyChainRegistry.transferOwnership(_batchId, PHARMACY, requestedQuantity);
+    }
+
+    function test_RevertWhenDispenseMoreThanAvailable() public registerAndApproveMedicine createBatch {
+        // Transfer exactly 100 units to pharmacy
+        vm.prank(MANUFACTURER);
+        supplyChainRegistry.transferOwnership(_batchId, PHARMACY, 100);
+
+        // Try to dispense 101 units (more than available)
+        vm.prank(PHARMACY);
+        vm.expectRevert(
+            abi.encodeWithSelector(SupplyChainRegistry.SupplyChain__SenderHasInsufficientQuantity.selector, 101, 100)
+        );
+        supplyChainRegistry.dispenseMedicine(_batchId, 101, patientId);
     }
 
     function test_RevertWithReceiverIsNotEligible() public registerAndApproveMedicine createBatch {
@@ -301,6 +518,61 @@ contract SupplyChainRegistryTest is Test {
         console2.log("Quantity: ", firstChainEvent.quantity);
         console2.log("Timestamp: ", firstChainEvent.timestamp);
         console2.log("PatientID: ", firstChainEvent.patientId);
+    }
+
+    function test_GetEntityMedicines() public registerAndApproveMedicine createBatch {
+        // Setup a second medicine and batch
+        string memory secondMedicineId = "M-IBU01";
+        string memory secondBatchId = "B1-IBU01";
+
+        vm.prank(MANUFACTURER);
+        drugRegistry.registerMedicine(secondMedicineId, "345-4228-4232", "Ibuprofen", "Advil", _ingredients, _details);
+
+        vm.prank(REGULATOR);
+        drugRegistry.approveMedicine(secondMedicineId);
+
+        vm.prank(MANUFACTURER);
+        drugRegistry.createBatch(
+            secondMedicineId,
+            secondBatchId,
+            1000, // quantity
+            _productionDate,
+            _expiryDate
+        );
+
+        vm.startPrank(MANUFACTURER);
+        // Transfer first medicine
+        supplyChainRegistry.transferOwnership(_batchId, SUPPLIER, 500);
+        supplyChainRegistry.transferOwnership(_batchId, PHARMACY, 300);
+
+        // Transfer second medicine
+        supplyChainRegistry.transferOwnership(secondBatchId, SUPPLIER, 200);
+        supplyChainRegistry.transferOwnership(secondBatchId, PHARMACY, 150);
+        vm.stopPrank();
+
+        // Test manufacturer's medicines
+        SupplyChainRegistry.MedicineDetails[] memory manufacturerMedicines =
+            supplyChainRegistry.getEntityMedicines(MANUFACTURER);
+
+        // Manufacturer should have two medicines
+        assertEq(manufacturerMedicines.length, 2, "Manufacturer should have 2 medicine types");
+
+        // Verify medicine details for manufacturer (quantities remaining after transfers)
+        for (uint256 i = 0; i < manufacturerMedicines.length; i++) {
+            if (keccak256(bytes(manufacturerMedicines[i].medicineId)) == keccak256(bytes(_medicineId))) {
+                assertEq(manufacturerMedicines[i].medicineId, _medicineId);
+                assertEq(manufacturerMedicines[i].batchId, _batchId);
+                assertEq(manufacturerMedicines[i].name, _name);
+                assertEq(manufacturerMedicines[i].brand, _brand);
+                assertEq(manufacturerMedicines[i].remainingQuantity, 4000 - 500 - 300);
+            } else {
+                assertEq(manufacturerMedicines[i].medicineId, secondMedicineId);
+                assertEq(manufacturerMedicines[i].batchId, secondBatchId);
+                assertEq(manufacturerMedicines[i].name, "Ibuprofen");
+                assertEq(manufacturerMedicines[i].brand, "Advil");
+                assertEq(manufacturerMedicines[i].remainingQuantity, 1000 - 200 - 150);
+            }
+        }
     }
 
     function test_GetBatchEvents() public registerAndApproveMedicine createBatch {

@@ -45,6 +45,14 @@ contract SupplyChainRegistry {
         string patientId;
     }
 
+    struct MedicineDetails {
+        string medicineId;
+        string batchId;
+        string name;
+        string brand;
+        uint256 remainingQuantity;
+    }
+
     // Define a struct to hold both address and batchID
     struct MedicineHolder {
         address holderAddress;
@@ -59,6 +67,8 @@ contract SupplyChainRegistry {
     mapping(string => SupplyChainEvent[]) public batchEvents;
     mapping(address => mapping(string => uint256)) public inventory;
     mapping(string => MedicineHolder[]) public medicineHolders;
+    // New mapping to track medicineIds held by each address
+    mapping(address => string[]) private addressMedicineIds;
 
     // ================ EVENTS ================
     event MedicineTransferred(string indexed batchId, address indexed from, address indexed to, uint256 quantity);
@@ -116,6 +126,9 @@ contract SupplyChainRegistry {
         if (inventory[manufacturer][medicineId] == quantity) {
             MedicineHolder memory newHolder = MedicineHolder({holderAddress: manufacturer, batchId: batchId});
             medicineHolders[medicineId].push(newHolder);
+
+            // Add medicineId to manufacturer's list if not already present
+            addMedicineIdToAddress(manufacturer, medicineId);
         }
 
         // Record supply chain event
@@ -200,6 +213,11 @@ contract SupplyChainRegistry {
         inventory[msg.sender][batch.medicineId] -= quantity;
         inventory[entityAddress][batch.medicineId] += quantity;
 
+        // Check if the sender's inventory for this medicine is now zero, and if so, remove it from their list
+        if (inventory[msg.sender][batch.medicineId] == 0) {
+            removeMedicineIdFromAddress(msg.sender, batch.medicineId);
+        }
+
         // emit low stock event if quantity is less than 10
         uint256 sendersInventory = inventory[msg.sender][batch.medicineId];
         if (sendersInventory <= 10) {
@@ -210,6 +228,9 @@ contract SupplyChainRegistry {
         if (inventory[entityAddress][batch.medicineId] == quantity) {
             MedicineHolder memory newHolder = MedicineHolder({holderAddress: entityAddress, batchId: batchId});
             medicineHolders[batch.medicineId].push(newHolder);
+
+            // Add medicineId to receiver's list if not already present
+            addMedicineIdToAddress(entityAddress, batch.medicineId);
         }
 
         // get event type based on receiver's role
@@ -266,6 +287,11 @@ contract SupplyChainRegistry {
 
         // Update inventories
         inventory[msg.sender][batch.medicineId] -= quantity;
+
+        // Check if the pharmacy's inventory for this medicine is now zero, and if so, remove it from their list
+        if (inventory[msg.sender][batch.medicineId] == 0) {
+            removeMedicineIdFromAddress(msg.sender, batch.medicineId);
+        }
 
         // emit low stock event if quantity is less than 10
         uint256 sendersInventory = inventory[msg.sender][batch.medicineId];
@@ -407,6 +433,66 @@ contract SupplyChainRegistry {
         return true;
     }
 
+    /**
+     * @dev Get all medicineIds associated with an address
+     * @param holderAddress Address of the entity
+     * @return string[] Array of medicineIds
+     */
+    function getAddressMedicineIds(address holderAddress) public view returns (string[] memory) {
+        return addressMedicineIds[holderAddress];
+    }
+
+    /**
+     * @dev Get all medicines in the possession of an entity with detailed information
+     * @param entityAddress Address of the entity
+     * @return MedicineDetails[] Array of medicine details including ID, batch, name, brand, and quantity
+     */
+    function getEntityMedicines(address entityAddress) public view returns (MedicineDetails[] memory) {
+        // Verify entity is registered
+        if (!globalRegistry.verifyEntity(entityAddress)) {
+            revert SupplyChain__SenderIsNotAuthorized(entityAddress);
+        }
+
+        // Get all medicine IDs in entity's possession
+        string[] memory medicineIds = getAddressMedicineIds(entityAddress);
+
+        // Create result array
+        MedicineDetails[] memory result = new MedicineDetails[](medicineIds.length);
+
+        // Loop through each medicine ID and get details
+        for (uint256 i = 0; i < medicineIds.length; i++) {
+            string memory medicineId = medicineIds[i];
+
+            // Get medicine quantity from inventory
+            uint256 quantity = getInventory(entityAddress, medicineId);
+
+            // Get medicine holders to find the batch ID
+            MedicineHolder[] memory holders = getMedicineHolders(medicineId);
+            string memory batchId = "";
+
+            // Find the batch ID for this entity
+            for (uint256 j = 0; j < holders.length; j++) {
+                if (holders[j].holderAddress == entityAddress) {
+                    batchId = holders[j].batchId;
+                    break;
+                }
+            }
+
+            // Get medicine details from drug registry
+            (,, string memory name, string memory brand,,,,,,) = drugRegistry.getMedicineDetailsById(medicineId);
+
+            result[i] = MedicineDetails({
+                medicineId: medicineId,
+                batchId: batchId,
+                name: name,
+                brand: brand,
+                remainingQuantity: quantity
+            });
+        }
+
+        return result;
+    }
+
     // =========================== HELPER FUNCTION ===========================
     function getEventType(IGlobalRegistry.Role role) internal pure returns (EventType) {
         EventType eventType;
@@ -419,5 +505,57 @@ contract SupplyChainRegistry {
         }
 
         return eventType;
+    }
+
+    /**
+     * @dev Add medicineId to an address's list of medicines if not already present
+     * @param holderAddress Address of the entity
+     * @param medicineId ID of the medicine
+     */
+    function addMedicineIdToAddress(address holderAddress, string memory medicineId) internal {
+        string[] storage medicineIdList = addressMedicineIds[holderAddress];
+
+        // Check if medicineId already exists for this address
+        bool medicineIdExists = false;
+        for (uint256 i = 0; i < medicineIdList.length; i++) {
+            if (keccak256(bytes(medicineIdList[i])) == keccak256(bytes(medicineId))) {
+                medicineIdExists = true;
+                break;
+            }
+        }
+
+        if (!medicineIdExists) {
+            medicineIdList.push(medicineId);
+        }
+    }
+
+    /**
+     * @dev Remove medicineId from an address's list when inventory is depleted
+     * @param holderAddress Address of the entity
+     * @param medicineId ID of the medicine to remove
+     */
+    function removeMedicineIdFromAddress(address holderAddress, string memory medicineId) internal {
+        string[] storage medicineIdList = addressMedicineIds[holderAddress];
+        uint256 listLength = medicineIdList.length;
+
+        // Find the index of the medicineId to remove
+        uint256 indexToRemove = listLength; // Initialize to an invalid index
+        for (uint256 i = 0; i < listLength; i++) {
+            if (keccak256(bytes(medicineIdList[i])) == keccak256(bytes(medicineId))) {
+                indexToRemove = i;
+                break;
+            }
+        }
+
+        // If the medicineId was found in the list
+        if (indexToRemove < listLength) {
+            // Move the last element to the position of the element to delete
+            if (indexToRemove < listLength - 1) {
+                medicineIdList[indexToRemove] = medicineIdList[listLength - 1];
+            }
+
+            // Remove the last element
+            medicineIdList.pop();
+        }
     }
 }

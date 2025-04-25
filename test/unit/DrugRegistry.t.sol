@@ -21,6 +21,9 @@ contract DrugRegistryTest is Test {
     string public _name = "Paracetamol";
     string public _brand = "Exzol";
     string public _medicineId = "M-PAE01";
+    string public _serialNo = "563-58d9-7e13";
+    string public _ingredients = "Ascorbic Acid 250mg, calcium stearate 30g ";
+    string public _details = "Maybe cause drowsiness";
     string public _batchId = "B1-PAE01";
     uint256 public _quantity = 4000;
     uint256 public _productionDate = block.timestamp;
@@ -50,7 +53,7 @@ contract DrugRegistryTest is Test {
 
     modifier registerAndApproveMedicine() {
         vm.prank(MANUFACTURER);
-        drugRegistry.registerMedicine(_medicineId, _name, _brand);
+        drugRegistry.registerMedicine(_medicineId, _serialNo, _name, _brand, _ingredients, _details);
         console2.log("Medicine registered with Id: ", _medicineId);
 
         // approve registered medicine
@@ -72,11 +75,14 @@ contract DrugRegistryTest is Test {
 
     function test_RegisterMedicine() public {
         vm.prank(MANUFACTURER);
-        drugRegistry.registerMedicine(_medicineId, _name, _brand);
+        drugRegistry.registerMedicine(_medicineId, _serialNo, _name, _brand, _ingredients, _details);
         (
             string memory medicineId,
+            ,
             string memory name,
             string memory brand,
+            ,
+            ,
             uint256 registrationDate,
             address manufacturer,
             ,
@@ -94,26 +100,17 @@ contract DrugRegistryTest is Test {
     function test_RegulatorCanApproveMedicine() public {
         // register new medicine
         vm.prank(MANUFACTURER);
-        drugRegistry.registerMedicine(_medicineId, _name, _brand);
+        drugRegistry.registerMedicine(_medicineId, _serialNo, _name, _brand, _ingredients, _details);
 
         // approve registered medicine
         vm.prank(REGULATOR);
         drugRegistry.approveMedicine(_medicineId);
 
-        (string memory medicineId,,,,,, bool approved) = drugRegistry.getMedicineDetailsById(_medicineId);
+        (string memory medicineId,,,,,,,,, bool approved) = drugRegistry.getMedicineDetailsById(_medicineId);
         assertTrue(approved);
 
         console2.log("Medicine Id: ", medicineId);
         console2.log("Approved: ", approved);
-    }
-
-    function test_SetSupplyChainRegistry() public {
-        vm.prank(REGULATOR);
-        drugRegistry.setSupplyChainRegistry(supplyChainRegistryAddr);
-
-        address _supplyChainRegistryAddr = drugRegistry.getSupplyChainRegistryContractAddress();
-
-        assertEq(supplyChainRegistryAddr, _supplyChainRegistryAddr);
     }
 
     function test_ManufacturerCanCreateBatch() public registerAndApproveMedicine {
@@ -181,6 +178,48 @@ contract DrugRegistryTest is Test {
         drugRegistry.requireBatchExists(_batchId);
     }
 
+    function test_GetMedicineIds() public registerAndApproveMedicine {
+        // Register another medicine to have at least 2 medicines
+        string memory secondMedicineId = "M-PAE02";
+        vm.prank(MANUFACTURER);
+        drugRegistry.registerMedicine(secondMedicineId, "345-4228-4232", "Ibuprofen", "Advil", _ingredients, _details);
+
+        // Get all medicine IDs
+        string[] memory medicineIds = drugRegistry.getMedicineIds();
+
+        // Assertions
+        assertEq(medicineIds.length, 2);
+        assertEq(medicineIds[0], _medicineId);
+        assertEq(medicineIds[1], secondMedicineId);
+
+        // Log for visibility
+        console2.log("Medicine count:", medicineIds.length);
+        for (uint256 i = 0; i < medicineIds.length; i++) {
+            console2.log("Medicine ID at index", i, ":", medicineIds[i]);
+        }
+    }
+
+    function test_GetBatchIds() public registerAndApproveMedicine createBatch {
+        // Create another batch to have at least 2 batches
+        string memory secondBatchId = "B1-PAE02";
+        vm.prank(MANUFACTURER);
+        drugRegistry.createBatch(_medicineId, secondBatchId, _quantity, _productionDate, _expiryDate);
+
+        // Get all batch IDs
+        string[] memory batchIds = drugRegistry.getBatchIds();
+
+        // Assertions
+        assertEq(batchIds.length, 2);
+        assertEq(batchIds[0], _batchId);
+        assertEq(batchIds[1], secondBatchId);
+
+        // Log for visibility
+        console2.log("Batch count:", batchIds.length);
+        for (uint256 i = 0; i < batchIds.length; i++) {
+            console2.log("Batch ID at index", i, ":", batchIds[i]);
+        }
+    }
+
     // =========================== REVERTS ===========================
 
     function test_RevertMedicineRegistrationWithMinLengthRequirement() public {
@@ -192,12 +231,12 @@ contract DrugRegistryTest is Test {
                 DrugRegistry.DrugRegistry__MinLengthRequired.selector, "Medicine Name", bytes(name).length, 2
             )
         );
-        drugRegistry.registerMedicine(_medicineId, name, _brand);
+        drugRegistry.registerMedicine(_medicineId, _serialNo, name, _brand, _ingredients, _details);
     }
 
     function test_RevertWithSenderIsNotAuthorizedToPerformAction() public {
         vm.startPrank(MANUFACTURER);
-        drugRegistry.registerMedicine(_medicineId, _name, _brand);
+        drugRegistry.registerMedicine(_medicineId, _serialNo, _name, _brand, _ingredients, _details);
 
         vm.expectRevert(abi.encodeWithSelector(DrugRegistry.DrugRegistry__SenderIsNotAuthorized.selector, MANUFACTURER));
         drugRegistry.approveMedicine(_medicineId);
@@ -219,7 +258,7 @@ contract DrugRegistryTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(DrugRegistry.DrugRegistry__MedicineExistenceStatus.selector, _medicineId, true)
         );
-        drugRegistry.registerMedicine(_medicineId, _name, _brand);
+        drugRegistry.registerMedicine(_medicineId, _serialNo, _name, _brand, _ingredients, _details);
     }
 
     function test_RevertWithBatchAlreadyExists() public registerAndApproveMedicine createBatch {
@@ -251,7 +290,7 @@ contract DrugRegistryTest is Test {
 
     function test_RevertWithMedicineNotApproved() public {
         vm.startPrank(MANUFACTURER);
-        drugRegistry.registerMedicine(_medicineId, _name, _brand);
+        drugRegistry.registerMedicine(_medicineId, _serialNo, _name, _brand, _ingredients, _details);
 
         vm.expectRevert(
             abi.encodeWithSelector(DrugRegistry.DrugRegistry__MedicineApprovalStatus.selector, _medicineId, false)
@@ -264,8 +303,11 @@ contract DrugRegistryTest is Test {
     function test_GetMedicineDetailsById() public registerAndApproveMedicine {
         (
             string memory medicineId,
+            ,
             string memory name,
             string memory brand,
+            ,
+            ,
             uint256 registrationDate,
             address manufacturer,
             ,
@@ -332,12 +374,12 @@ contract DrugRegistryTest is Test {
         vm.prank(MANUFACTURER);
         vm.expectEmit(true, false, false, true);
         emit DrugRegistry.MedicineRegistered(_medicineId, _name, MANUFACTURER);
-        drugRegistry.registerMedicine(_medicineId, _name, _brand);
+        drugRegistry.registerMedicine(_medicineId, _serialNo, _name, _brand, _ingredients, _details);
     }
 
     function test_EmitsMedicineApproved() public {
         vm.prank(MANUFACTURER);
-        drugRegistry.registerMedicine(_medicineId, _name, _brand);
+        drugRegistry.registerMedicine(_medicineId, _serialNo, _name, _brand, _ingredients, _details);
 
         vm.prank(REGULATOR);
         vm.expectEmit(true, false, false, true);

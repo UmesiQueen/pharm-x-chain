@@ -14,6 +14,21 @@ interface IDrugRegistry {
         bool isActive;
     }
 
+    function getMedicineDetailsById(string memory _medicineId)
+        external
+        view
+        returns (
+            string memory medicineId,
+            string memory serialNo,
+            string memory name,
+            string memory brand,
+            string memory ingredients,
+            string memory details,
+            uint256 registrationDate,
+            address manufacturer,
+            string memory manufacturerId,
+            bool approved
+        );
     function getBatchDetails(string memory _batchId) external view returns (Batch memory);
     function requireBatchExists(string memory batchId) external view;
     function requireMedicineExists(string memory medicineId) external view;
@@ -39,8 +54,11 @@ contract DrugRegistry is IDrugRegistry {
     // ================ STRUCTS ================
     struct Medicine {
         string medicineId;
+        string serialNo;
         string name;
         string brand;
+        string ingredients;
+        string details;
         uint256 registrationDate;
         address manufacturer;
         string manufacturerId;
@@ -122,13 +140,20 @@ contract DrugRegistry is IDrugRegistry {
     /**
      * @dev Register a new medicine
      * @param medicineId ID of the medicine
+     * @param serialNo Serial number of the medicine
      * @param name Name of the medicine
      * @param brand Brand of the medicine
+     * @param ingredients Ingredients of the medicine
+     * @param details Additional details about the medicine
      */
-    function registerMedicine(string memory medicineId, string memory name, string memory brand)
-        public
-        onlyRole(IGlobalRegistry.Role.MANUFACTURER)
-    {
+    function registerMedicine(
+        string memory medicineId,
+        string memory serialNo,
+        string memory name,
+        string memory brand,
+        string memory ingredients,
+        string memory details
+    ) public onlyRole(IGlobalRegistry.Role.MANUFACTURER) {
         if (bytes(name).length < 2) {
             revert DrugRegistry__MinLengthRequired("Medicine Name", bytes(name).length, 2);
         } else if (bytes(brand).length < 2) {
@@ -142,8 +167,11 @@ contract DrugRegistry is IDrugRegistry {
 
         Medicine storage newMedicine = medicines[medicineId];
         newMedicine.medicineId = medicineId;
+        newMedicine.serialNo = serialNo;
         newMedicine.name = name;
         newMedicine.brand = brand;
+        newMedicine.ingredients = ingredients;
+        newMedicine.details = details;
         newMedicine.registrationDate = block.timestamp;
         newMedicine.manufacturer = msg.sender;
         newMedicine.manufacturerId = globalRegistry.getManufacturerId(msg.sender);
@@ -305,21 +333,27 @@ contract DrugRegistry is IDrugRegistry {
      * @dev Get medicine details by ID
      * @param _medicineId ID of the medicine
      * @return medicineId ID of the medicine
+     * @return serialNo Serial number of the medicine
      * @return name Name of the medicine
      * @return brand Brand of the medicine
+     * @return ingredients Ingredients of the medicine
+     * @return details Additional details about the medicine
      * @return registrationDate Registration date (Unix timestamp)
      * @return manufacturer Address of manufacturer
      * @return manufacturerId ID of the manufacturer
      * @return approved Approval status of the medicine
      */
     function getMedicineDetailsById(string memory _medicineId)
-        public
+        external
         view
         medicineExists(_medicineId)
         returns (
             string memory medicineId,
+            string memory serialNo,
             string memory name,
             string memory brand,
+            string memory ingredients,
+            string memory details,
             uint256 registrationDate,
             address manufacturer,
             string memory manufacturerId,
@@ -330,8 +364,11 @@ contract DrugRegistry is IDrugRegistry {
 
         return (
             medicine.medicineId,
+            medicine.serialNo,
             medicine.name,
             medicine.brand,
+            medicine.ingredients,
+            medicine.details,
             medicine.registrationDate,
             medicine.manufacturer,
             medicine.manufacturerId,
@@ -384,8 +421,12 @@ contract DrugRegistry is IDrugRegistry {
         return batchIds.length;
     }
 
-    function getSupplyChainRegistryContractAddress() public view returns (address) {
-        return supplyChainRegistry;
+    function getMedicineIds() public view returns (string[] memory) {
+        return medicineIds;
+    }
+
+    function getBatchIds() public view returns (string[] memory) {
+        return batchIds;
     }
 
     /**
